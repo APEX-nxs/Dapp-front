@@ -22,7 +22,7 @@ const config = getDefaultConfig({
   transports: {
     [mainnet.id]: http(),
     [bsc.id]: http(),
-    [sepolia.id]: https(),
+    [sepolia.id]: http(),
   },
 });
 
