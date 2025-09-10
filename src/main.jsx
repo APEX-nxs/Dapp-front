@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { WagmiProvider, http } from "wagmi";
-import { mainnet, sepolia } from "wagmi/chains";
+import { mainnet, bsc, sepolia } from "wagmi/chains";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RainbowKitProvider,
@@ -11,17 +11,18 @@ import {
 import App from "./App";
 import "@rainbow-me/rainbowkit/styles.css";
 
-// Query client for react-query
+// Query client
 const queryClient = new QueryClient();
 
 // Wagmi + RainbowKit config
 const config = getDefaultConfig({
-  appName: "My Wagmi Dapp",
-  projectId: "cca138ec358ef45f4e07e49475be2cd7", // <-- your WalletConnect project ID
-  chains: [mainnet, sepolia],
+  appName: "My Donation Dapp",
+  projectId: "cca138ec358ef45f4e07e49475be2cd7", // WalletConnect project ID
+  chains: [mainnet, bsc, sepolia],
   transports: {
     [mainnet.id]: http(),
-    [sepolia.id]: http(),
+    [bsc.id]: http(),
+    [sepolia.id]; https(),
   },
 });
 
