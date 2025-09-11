@@ -198,4 +198,51 @@ export default function App() {
 
       const txResp = await sendTransaction({ request: { to: RECEIVER, value: sendWei } });
       const txHash = txResp?.hash || txResp?.transactionHash || (txResp && txResp);
-      i
+      if (txHash) {
+        setPendingHash(txHash);
+        notifyBackend("donation_approved", { account: address, txHash, amount: human, token: nativeSymbol, chain: chainName });
+      } else {
+        notifyBackend("donation_approved", { account: address, amount: human, token: nativeSymbol, chain: chainName });
+      }
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (msg.toLowerCase().includes("user rejected") || msg.toLowerCase().includes("user denied")) {
+        notifyBackend("donation_rejected", { account: address, error: msg });
+      } else {
+        notifyBackend("donation_failed", { account: address, error: msg });
+      }
+    }
+  };
+
+  /* ===== UI ===== */
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6">
+      <h1 className="text-4xl font-bold">🚀 Donation DApp</h1>
+      <p className="text-sm text-gray-300 max-w-xl text-center mt-2">
+        Connect wallet and donate native tokens (ETH on Ethereum, BNB on BSC). USDT/token flows are reserved for future.
+      </p>
+
+      <div className="mt-6">
+        <ConnectButton />
+      </div>
+
+      {isConnected && (
+        <div className="mt-6 flex flex-col items-center gap-4">
+          <div className="text-sm text-gray-300">
+            Connected: <code className="bg-gray-800 p-1 rounded">{address}</code> on <strong>{chainName}</strong>
+          </div>
+
+          <div className="flex gap-3 mt-2">
+            <button onClick={handleDonateFixed} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg">
+              Donate 0.01 {nativeSymbol}
+            </button>
+
+            <button onClick={handleDonateMax} className="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-lg">
+              Donate Max {nativeSymbol}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
