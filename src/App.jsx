@@ -6,8 +6,8 @@ import {
   useSendTransaction,
   useChainId,
   useWaitForTransactionReceipt,
-  readContract,
 } from "wagmi";
+import { readContract } from "@wagmi/core";
 import { parseEther, formatEther } from "viem";
 
 // ✅ Backend endpoint (Flask)
